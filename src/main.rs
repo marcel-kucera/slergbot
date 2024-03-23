@@ -45,11 +45,17 @@ impl Handler {
 
         // jshell
         if msg.content.starts_with("jshell> ") {
-            let stmt = msg.content.split_at(8).1;
+            let stmt = msg
+                .content
+                .split_at(8)
+                .1
+                .replace("„", "\"")
+                .replace("“", "\"");
             let mut cmd = Command::new("jshell")
                 .arg("-")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
                 .spawn()?;
 
             let mut stdin = cmd.stdin.take().ok_or(AppError::ChildIOError)?;
@@ -60,6 +66,9 @@ impl Handler {
             let mut output = String::new();
             let mut stdout = cmd.stdout.take().ok_or(AppError::ChildIOError)?;
             stdout.read_to_string(&mut output).await?;
+
+            let mut stderr = cmd.stderr.take().ok_or(AppError::ChildIOError)?;
+            stderr.read_to_string(&mut output).await?;
 
             msg.channel_id
                 .say(
