@@ -1,0 +1,13 @@
+[package]
+name = "slergbot"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dotenvy = "0.15.7"
+rand = "0.8.5"
+serenity = { version = "0.12.1", features = ["full"] }
+thiserror = "1.0.58"
+tokio = { version = "1.36.0", features = ["full"] }
