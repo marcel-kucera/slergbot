@@ -99,15 +99,12 @@ impl Handler {
 impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
         if let Err(err) = self.message_handler(&ctx, &msg).await {
-            println!("{:?}", err.to_string());
+            println!("{:?}", err);
 
             // do not error out on error logging
             let _ = msg
                 .channel_id
-                .say(
-                    &ctx.http,
-                    format!("Der Slerg ist im Saal ☹️ : {}", err.to_string()),
-                )
+                .say(&ctx.http, format!("Der Slerg ist im Saal ☹️ : ```{:?}```", err))
                 .await;
         }
     }
