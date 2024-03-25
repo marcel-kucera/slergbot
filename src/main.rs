@@ -1,31 +1,43 @@
 use std::env;
-use std::process::Stdio;
+use std::io::ErrorKind;
+use std::ops::DerefMut;
 
 use dotenvy::dotenv;
+use jshell::{JShell, JShellError};
 use rand::Rng;
 use serenity::all::CreateMessage;
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::prelude::*;
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::Command;
 
-struct Handler;
+mod jshell;
+
+struct Handler {
+    jshell: Mutex<JShell>,
+}
 
 #[derive(Error, Debug)]
 enum AppError {
-    #[error("Discord Error")]
+    #[error("discord error: {0:?}")]
     DiscordError(#[from] SerenityError),
 
-    #[error("IO Error")]
-    IOError(#[from] std::io::Error),
-
-    #[error("Child IO Error")]
-    ChildIOError,
+    #[error("jshell error: {0}")]
+    JShellError(#[from] JShellError),
 }
 
 impl Handler {
+    async fn revive_jshell(&self) -> Result<(), AppError> {
+        let instance = JShell::new().await?;
+
+        // replace the jshell instance behind the mutex
+        let mut lock = self.jshell.lock().await;
+        let jshell = lock.deref_mut();
+        *jshell = instance;
+
+        Ok(())
+    }
+
     async fn message_handler(&self, ctx: &Context, msg: &Message) -> Result<(), AppError> {
         // do not reply to self
         if msg.author.bot {
@@ -51,24 +63,20 @@ impl Handler {
                 .1
                 .replace("„", "\"")
                 .replace("“", "\"");
-            let mut cmd = Command::new("jshell")
-                .arg("-")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()?;
 
-            let mut stdin = cmd.stdin.take().ok_or(AppError::ChildIOError)?;
-            stdin.write(stmt.as_bytes()).await?;
-            stdin.shutdown().await?;
-            drop(stdin); // Send EOF to jshell and stop execution
+            let mut jshell = self.jshell.lock().await;
+
+            jshell.input(&format!("{stmt}\n")).await?;
 
             let mut output = String::new();
-            let mut stdout = cmd.stdout.take().ok_or(AppError::ChildIOError)?;
-            stdout.read_to_string(&mut output).await?;
-
-            let mut stderr = cmd.stderr.take().ok_or(AppError::ChildIOError)?;
-            stderr.read_to_string(&mut output).await?;
+            loop {
+                let out = jshell.read_line().await?;
+                if out.1 {
+                    break;
+                } else {
+                    output.push_str(&out.0);
+                }
+            }
 
             msg.channel_id
                 .say(
@@ -99,13 +107,31 @@ impl Handler {
 impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
         if let Err(err) = self.message_handler(&ctx, &msg).await {
-            println!("{:?}", err);
+            println!("error during message handler: {err:?}");
 
             // do not error out on error logging
             let _ = msg
                 .channel_id
-                .say(&ctx.http, format!("Der Slerg ist im Saal ☹️ : ```{:?}```", err))
+                .say(
+                    &ctx.http,
+                    format!("Der Slerg ist im Saal ☹️ : ```{}```", err.to_string()),
+                )
                 .await;
+
+            // revive jshell if the error is broken pipe
+            if let AppError::JShellError(JShellError::IOError(io_err)) = err {
+                if let ErrorKind::BrokenPipe = io_err.kind() {
+                    let revive_status = match self.revive_jshell().await {
+                        Ok(()) => "# JShell wurde wiederbelebt\nVersuch es nochmal!".to_string(),
+                        Err(err) => {
+                            println!("failed to revive jshell: {err:?}");
+                            format!("# JShell konnte nicht wiederbelebt werden:\n{err}")
+                        }
+                    };
+
+                    let _ = msg.channel_id.say(&ctx.http, revive_status).await;
+                }
+            }
         }
     }
 }
@@ -122,8 +148,12 @@ async fn main() {
         | GatewayIntents::MESSAGE_CONTENT;
 
     // Create a new instance of the Client, logging in as a bot.
+    let jshell = JShell::new().await.expect("failed to spawn jshell");
+
     let mut client = Client::builder(&token, intents)
-        .event_handler(Handler)
+        .event_handler(Handler {
+            jshell: Mutex::new(jshell),
+        })
         .await
         .expect("Err creating client");
 
