@@ -5,7 +5,7 @@ use std::string::FromUtf8Error;
 
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::select;
 
 #[derive(Error, Debug)]
@@ -24,6 +24,8 @@ pub enum JShellError {
 }
 
 pub struct JShell {
+    // keep reference to jshell, as it is killed when dropped
+    _instance: Child,
     out: Lines<BufReader<ChildStdout>>,
     err: BufReader<ChildStderr>,
     input: ChildStdin,
@@ -35,6 +37,7 @@ impl JShell {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| JShellError::SpawnError(e))?;
 
@@ -56,6 +59,7 @@ impl JShell {
         let buferr = BufReader::new(stderr);
 
         let mut jshell = JShell {
+            _instance: cmd,
             out: bufout,
             err: buferr,
             input: stdin,
@@ -90,11 +94,28 @@ impl JShell {
                 (line?.ok_or(JShellError::ClosedError)?,false)
             }
             _ = self.err.read_until(b'\x00', &mut err_vec) => {
-                (String::from_utf8(err_vec)?,true)
+                if err_vec.last().is_none(){
+                    return Err(JShellError::ClosedError)
+                } else{
+                    (String::from_utf8(err_vec)?,true)
+                }
             }
         };
 
         Ok(out)
+    }
+
+    pub async fn read_output(&mut self) -> Result<String, JShellError> {
+        let mut output = String::new();
+        loop {
+            let out = self.read_line().await?;
+            if out.1 {
+                break;
+            } else {
+                output.push_str(&out.0);
+            }
+        }
+        Ok(output)
     }
 
     pub async fn input(&mut self, stmt: &str) -> Result<(), JShellError> {

@@ -1,6 +1,7 @@
 use std::env;
 use std::io::ErrorKind;
 use std::ops::DerefMut;
+use std::time::Duration;
 
 use dotenvy::dotenv;
 use jshell::{JShell, JShellError};
@@ -10,6 +11,7 @@ use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::prelude::*;
 use thiserror::Error;
+use tokio::time::{error::Elapsed, timeout};
 
 mod jshell;
 
@@ -24,6 +26,9 @@ enum AppError {
 
     #[error("jshell error: {0}")]
     JShellError(#[from] JShellError),
+
+    #[error("timeout")]
+    TimeoutError(#[from] Elapsed),
 }
 
 impl Handler {
@@ -68,15 +73,8 @@ impl Handler {
 
             jshell.input(&format!("{stmt}\n")).await?;
 
-            let mut output = String::new();
-            loop {
-                let out = jshell.read_line().await?;
-                if out.1 {
-                    break;
-                } else {
-                    output.push_str(&out.0);
-                }
-            }
+            let output = timeout(Duration::from_secs(5), jshell.read_output()).await?;
+            let output = output?;
 
             msg.channel_id
                 .say(
@@ -118,19 +116,27 @@ impl EventHandler for Handler {
                 )
                 .await;
 
-            // revive jshell if the error is broken pipe
-            if let AppError::JShellError(JShellError::IOError(io_err)) = err {
-                if let ErrorKind::BrokenPipe = io_err.kind() {
-                    let revive_status = match self.revive_jshell().await {
-                        Ok(()) => "# JShell wurde wiederbelebt\nVersuch es nochmal!".to_string(),
-                        Err(err) => {
-                            println!("failed to revive jshell: {err:?}");
-                            format!("# JShell konnte nicht wiederbelebt werden:\n{err}")
-                        }
-                    };
+            // revive jshell if it died, closed or times out
+            let needs_revive = if let AppError::JShellError(JShellError::IOError(io_err)) = err {
+                io_err.kind() == ErrorKind::BrokenPipe
+            } else if let AppError::JShellError(JShellError::ClosedError) = err {
+                true
+            } else if let AppError::TimeoutError(_) = err {
+                true
+            } else {
+                false
+            };
 
-                    let _ = msg.channel_id.say(&ctx.http, revive_status).await;
-                }
+            if needs_revive {
+                let revive_status = match self.revive_jshell().await {
+                    Ok(()) => "# JShell wurde wiederbelebt".to_string(),
+                    Err(err) => {
+                        println!("failed to revive jshell: {err:?}");
+                        format!("# JShell konnte nicht wiederbelebt werden:\n{err}")
+                    }
+                };
+
+                let _ = msg.channel_id.say(&ctx.http, revive_status).await;
             }
         }
     }
