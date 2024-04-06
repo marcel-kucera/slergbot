@@ -10,4 +10,5 @@ dotenvy = "0.15.7"
 rand = "0.8.5"
 serenity = { version = "0.12.1", features = ["full"] }
 thiserror = "1.0.58"
+time = { version = "0.3.34", features = ["parsing", "macros"] }
 tokio = { version = "1.36.0", features = ["full"] }

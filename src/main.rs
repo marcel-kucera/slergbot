@@ -11,6 +11,10 @@ use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::prelude::*;
 use thiserror::Error;
+use time::{
+    macros::{format_description, offset},
+    OffsetDateTime, Time,
+};
 use tokio::time::{error::Elapsed, timeout};
 
 mod jshell;
@@ -29,6 +33,12 @@ enum AppError {
 
     #[error("timeout")]
     TimeoutError(#[from] Elapsed),
+
+    #[error("command syntax error")]
+    CommandSyntaxError,
+
+    #[error("failed parsing time")]
+    TimeParseError(#[from] time::error::Parse),
 }
 
 impl Handler {
@@ -80,6 +90,36 @@ impl Handler {
                 .say(
                     &ctx.http,
                     format!("Die JSHELL hat gesprochen: ```{output}```"),
+                )
+                .await?;
+        }
+
+        // saal ende
+        if msg.content.starts_with("!saalende") {
+            let mut cmd = msg.content.split(" ");
+            cmd.next(); // skip command
+            let start_time = cmd.next().ok_or(AppError::CommandSyntaxError)?;
+            let end_time = cmd.next().ok_or(AppError::CommandSyntaxError)?;
+
+            let time_format = format_description!("[hour]:[minute]");
+            let start_time = Time::parse(&start_time, time_format)?;
+            let end_time = Time::parse(&end_time, time_format)?;
+
+            // Hardcode berlin offset
+            let current_time = OffsetDateTime::now_utc().to_offset(offset!(+2)).time();
+
+            let total_duration = end_time - start_time;
+            let elapsed_duration = current_time - start_time;
+
+            let percent_done = ((elapsed_duration / total_duration) * 100.0).floor();
+
+            msg.channel_id
+                .say(
+                    &ctx.http,
+                    format!(
+                        "Saal endet glücklicherweise nie, aber für heute ist er zu {}% um",
+                        percent_done
+                    ),
                 )
                 .await?;
         }
