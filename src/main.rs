@@ -60,7 +60,7 @@ impl Handler {
         }
 
         // Slerg whisper
-        if msg.content.to_lowercase().contains("system.out.println") {
+        if msg.content.to_lowercase().contains("system.out.print") {
             let slergimg = "https://cdn.discordapp.com/attachments/1105467484372475978/1219268951671050311/ohgott.png?ex=660aafb3&is=65f83ab3&hm=8ff2d8c3beafbb8e77d265bbe53b8a4d4e6224c5c4caa8a0f65356762be7c8ac&";
             let _ = msg
                 .author
